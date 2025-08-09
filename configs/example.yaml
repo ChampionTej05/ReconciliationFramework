@@ -1,0 +1,98 @@
+job:
+  name: "example_fdcs_vs_calc"
+  backend: pandas
+  join_type: outer
+  timezone: "Asia/Kolkata"
+
+inputs:
+  A:
+    path: "./sample/fdcs.csv"
+    delimiter: ","
+    encoding: "utf-8"
+    dtypes:
+      TRD_ID: "string"
+      BOOK: "string"
+      CCY: "string"
+      BAL: "float64"
+      ASOF: "date"
+    prefilter:
+      - { col: "ccy", op: "in", value: ["USD", "EUR"] }
+    sanitize:
+      rename:
+        TRD_ID: trade_id
+        BOOK: book
+        CCY: ccy
+        BAL: balance
+        ASOF: asof_date
+      select: [trade_id, book, ccy, balance, asof_date]
+      normalize:
+        trim_strings: true
+        upper_case: [ccy, book]
+  B:
+    path: "./sample/calc.csv"
+    delimiter: ","
+    encoding: "utf-8"
+    dtypes:
+      TRADE: "string"
+      DESK: "string"
+      CURRENCY: "string"
+      CALC_BAL: "float64"
+      ASOF: "date"
+    sanitize:
+      rename:
+        TRADE: trade_id
+        DESK: book
+        CURRENCY: ccy
+        CALC_BAL: balance
+        ASOF: asof_date
+      select: [trade_id, book, ccy, balance, asof_date]
+      normalize:
+        trim_strings: true
+        upper_case: [ccy, book]
+
+filters:
+  A:
+    - { col: "book", op: "in", value: ["EQD", "RATES"] }
+  B:
+    - { col: "book", op: "in", value: ["EQD", "RATES"] }
+
+aggregate:
+  A:
+    group_by: [book, ccy]
+    metrics:
+      balance: { agg: "sum" }
+  B:
+    group_by: [book, ccy]
+    metrics:
+      balance: { agg: "sum" }
+
+join:
+  keys: [book, ccy]
+  key_name: "recon_key"
+  type: outer
+
+reconcile:
+  numeric:
+    - column: balance
+      comparator: relative
+      tol_pct: 0.001
+      min_base: 1e-8
+
+report:
+  outputs:
+    dir: "out/example"
+    formats: ["csv"]
+  dataset_names:
+    A: "FDCS" 
+    B: "COLLATERAL" 
+  select:
+    keys: [book, ccy, balance_A, balance_B, delta_balance, abs_delta_balance, pct_delta_balance, match_balance, match_flag]
+
+drilldown:
+  enabled: true
+  strategy: add        # "add" = drill-down, "remove" = drill-up (we’ll support both)
+  levels:
+    - A_add: [trade_id]
+      B_add: [trade_id]         # Level 01 → (book, ccy, trade_id)
+    - A_add: [trade_id, asof_date] # Level 02 → (book, ccy, trade_id, asof_date)
+      B_add: [trade_id, asof_date]

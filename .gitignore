@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.recon-env/
+# Data & outputs
+out/
+*.parquet
+*.csv
+# OS/Editor
+.DS_Store
+.vscode/

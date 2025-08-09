@@ -1,0 +1,122 @@
+job:
+  name: "example_fdcs_calc_8cols"
+  backend: pandas
+  join_type: outer
+  timezone: "Asia/Kolkata"
+
+inputs:
+  A:
+    path: "./sample/fdcs_total.csv"
+    delimiter: ","
+    encoding: "utf-8"
+    dtypes:
+      trade_id: "string"
+      book: "string"
+      desk: "string"
+      ccy: "string"
+      counterparty: "string"
+      asof_date: "date"
+      currencyAmount: "float64"
+      USDAmount: "float64"
+    sanitize:
+      rename: {}      # already standardized
+      select: [trade_id, book, desk, ccy, counterparty, asof_date, currencyAmount, USDAmount]
+      normalize:
+        trim_strings: true
+        upper_case: [book, desk, ccy, counterparty]
+  B:
+    path: "./sample/calc_total.csv"
+    delimiter: ","
+    encoding: "utf-8"
+    dtypes:
+      TRADE: "string"
+      BOOK: "string"
+      DESK: "string"
+      CURRENCY: "string"
+      CP: "string"
+      ASOF: "date"
+      currency_amount: "float64"
+      usd_amount: "float64"
+    sanitize:
+      rename:
+        TRADE: trade_id
+        BOOK: book
+        DESK: desk
+        CURRENCY: ccy
+        CP: counterparty
+        ASOF: asof_date
+        currency_amount: currencyAmount
+        usd_amount: USDAmount
+      select: [trade_id, book, desk, ccy, counterparty, asof_date, currencyAmount, USDAmount]
+      normalize:
+        trim_strings: true
+        upper_case: [book, desk, ccy, counterparty]
+
+# optional filters (none needed here)
+filters:
+  A: []
+  B: []
+
+aggregate:
+  A:
+    group_by: [book, ccy]          # start at 2-column grain
+    metrics:
+      currencyAmount: { agg: "sum" }
+      USDAmount: { agg: "sum" }
+  B:
+    group_by: [book, ccy]
+    metrics:
+      currencyAmount: { agg: "sum" }
+      USDAmount: { agg: "sum" }
+
+join:
+  keys: [book, ccy]               # join at the same grain as aggregation
+  key_name: null                  # join directly on columns so book/ccy appear unsuffixed
+  type: outer
+
+reconcile:
+  numeric:
+    - column: currencyAmount
+      comparator: relative
+      tol_pct: 0.002         # 0.2% tolerance
+      min_base: 1e-8
+    - column: USDAmount
+      comparator: relative
+      tol_pct: 0.002
+      min_base: 1e-8
+
+report:
+  outputs:
+    dir: "out/example8"
+    formats: ["csv"]
+  dataset_names:
+    A: "FDCS"
+    B: "CALC"
+  select:
+    keys:
+      - book
+      - ccy
+      - trade_id
+      - desk
+      - counterparty
+      - asof_date
+      - FDCS_currencyAmount
+      - CALC_currencyAmount
+      - FDCS_USDAmount
+      - CALC_USDAmount
+      - delta_currencyAmount
+      - abs_delta_currencyAmount
+      - delta_USDAmount
+      - abs_delta_USDAmount
+      - match_currencyAmount
+      - match_USDAmount
+      - match_flag
+
+drilldown:
+  enabled: true
+  strategy: add   # drill-down by adding dimensions
+  levels:
+    - add: [trade_id]                 # level 1: (book, ccy, trade_id)
+    - add: [trade_id, desk]           # level 2: (book, ccy, trade_id, desk)
+    - add: [trade_id, desk, counterparty]         # level 3: (+ counterparty)
+    - add: [trade_id, desk, counterparty, asof_date]  # level 4: all 6 dims
