@@ -15,8 +15,8 @@ _AGG_MAP = {
 def aggregate(df: pd.DataFrame, spec: Dict) -> pd.DataFrame:
     if not spec:
         return df
-    group_by = spec.get('group_by') or []
-    metrics = spec.get('metrics') or {}
+    group_by = getattr(spec, 'group_by', []) 
+    metrics = getattr(spec, 'metrics', {})
     if not group_by:
         return df
     agg_dict = {}

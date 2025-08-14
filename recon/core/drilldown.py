@@ -23,47 +23,50 @@ def _adjust_groupby(spec: Optional[Dict[str, Any]], add: List[str] | None, remov
     if not spec:
         return spec
     spec2 = deepcopy(spec)
-    gb = spec2.get("group_by") or []
+    gb = getattr(spec2, "group_by", None) or []
     if remove:
         rem = set(remove)
         gb = [c for c in gb if c not in rem]
     if add:
         gb = _dedup_keep_order(list(gb) + list(add))
-    spec2["group_by"] = gb
+    setattr(spec2, "group_by", gb)
     return spec2
-
-def _columns_present(df: pd.DataFrame, cols: List[str]) -> List[str]:
-    return [c for c in cols if c in df.columns]
 
 def run_drilldown(
     A_prepared: pd.DataFrame,
     B_prepared: pd.DataFrame,
-    full_cfg: Dict[str, Any],
-    levels: List[Dict[str, Any]],
+    full_cfg: "RootCfg",
+    levels: List["DrillLevel"],
     strategy: str = "add",  # "add" (drill-down) or "remove" (drill-up)
 ) -> None:
     if not levels:
         return
-    print("f{A_prepared} \n {B_prepared}", A_prepared, B_prepared )
-    agg_cfg = full_cfg.get("aggregate", {})
-    aggA_base = agg_cfg.get("A")
-    aggB_base = agg_cfg.get("B")
-    join_cfg = full_cfg.get("join", {}) or {}
-    report_cfg_base = deepcopy(full_cfg.get("report", {}) or {})
+    print("f{A_prepared} \n {B_prepared}", A_prepared, B_prepared)
+    agg_cfg = getattr(full_cfg, "aggregate", None)
+    aggA_base = getattr(agg_cfg, "A", None) if agg_cfg else None
+    aggB_base = getattr(agg_cfg, "B", None) if agg_cfg else None
 
-    out_base_dir = Path(report_cfg_base.get("outputs", {}).get("dir", "out")) / "drilldown"
+    join_cfg = getattr(full_cfg, "join", None)
+    report_cfg_base = deepcopy(getattr(full_cfg, "report", None))
 
-    base_join_keys = join_cfg.get("keys", []) or []
-    join_type = join_cfg.get("type", "outer")
+    # Determine base output directory using attributes, defaulting to "out/drilldown"
+    base_out_dir = "out"
+    if report_cfg_base and hasattr(report_cfg_base, "outputs") and report_cfg_base.outputs:
+        if hasattr(report_cfg_base.outputs, "dir") and report_cfg_base.outputs.dir:
+            base_out_dir = report_cfg_base.outputs.dir
+    out_base_dir = Path(base_out_dir) / "drilldown"
+
+    base_join_keys = (getattr(join_cfg, "keys", None) or []) if join_cfg else []
+    join_type = (getattr(join_cfg, "type", None) or "outer") if join_cfg else "outer"
 
     for idx, level in enumerate(levels, start=1):
         # Resolve per-level adds/removes (support both common and per-side)
-        add_common = level.get("add") if strategy == "add" else None
-        rem_common = level.get("remove") if strategy == "remove" else None
-        A_add = level.get("A_add") or add_common or []
-        B_add = level.get("B_add") or add_common or []
-        A_rem = level.get("A_remove") or rem_common or []
-        B_rem = level.get("B_remove") or rem_common or []
+        add_common = getattr(level, "add", None) if strategy == "add" else None
+        rem_common = getattr(level, "remove", None) if strategy == "remove" else None
+        A_add = getattr(level, "A_add", None) or add_common or []
+        B_add = getattr(level, "B_add", None) or add_common or []
+        A_rem = getattr(level, "A_remove", None) or rem_common or []
+        B_rem = getattr(level, "B_Remove", None) or rem_common or []
 
         # Adjust group_by for each side
         aggA = _adjust_groupby(aggA_base, add=A_add, remove=A_rem)
@@ -92,23 +95,25 @@ def run_drilldown(
         )
 
         # Reconcile
-        dfR = reconcile(dfJ, full_cfg.get("reconcile", {}))
+        dfR = reconcile(dfJ, getattr(full_cfg, "reconcile", None))
 
-        # Output directory per level
+        # Output directory per level (mutate dataclass copy)
         report_cfg = deepcopy(report_cfg_base)
-        report_cfg.setdefault("outputs", {})
-        report_cfg["outputs"]["dir"] = str(out_base_dir / f"level_{idx:02d}")
+        if report_cfg and hasattr(report_cfg, "outputs") and report_cfg.outputs is not None:
+            if hasattr(report_cfg.outputs, "dir"):
+                report_cfg.outputs.dir = str(out_base_dir / f"level_{idx:02d}")
 
         # Selection (reuse top-level selection if present)
         select_cols = None
-        if report_cfg.get("select") and report_cfg["select"].get("keys"):
-            select_cols = report_cfg["select"]["keys"]
+        if report_cfg and hasattr(report_cfg, "select") and report_cfg.select is not None:
+            if hasattr(report_cfg.select, "keys") and report_cfg.select.keys is not None:
+                select_cols = report_cfg.select.keys
 
-        # drilldown will have columns from group by + select_cols 
-        drilldown_columns = [A_add + select_cols][0]
+        # drilldown will have columns from group by + select_cols
+        drilldown_columns = (A_add or []) + (select_cols or [])
         print("Drilldown Columns", drilldown_columns)
         seen = set()
-        # no duplicate columns post drilldown selections 
+        # no duplicate columns post drilldown selections
         result_columns = [x for x in drilldown_columns if not (x in seen or seen.add(x))]
 
         emit_reports(dfR, report_cfg, select_cols=result_columns)

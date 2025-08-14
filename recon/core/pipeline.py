@@ -11,27 +11,44 @@ from .reconcile import reconcile
 from .report import emit_reports
 from .audit import write_audit
 from .drilldown import run_drilldown   
+from .config import RootCfg
 
 _DEF_JOIN_TYPE='outer'
 
-def _load_config(config_path: str) -> dict:
-    text = Path(config_path).read_text()
-    return yaml.safe_load(text), text
+def _load_config(path: str) -> tuple[RootCfg, str]:
+    text = Path(path).read_text()
+    raw = yaml.safe_load(text) or {}
+    # Prefer a factory that recursively builds nested dataclasses
+    if hasattr(RootCfg, 'from_dict') and callable(getattr(RootCfg, 'from_dict')):
+        return RootCfg.from_dict(raw), text
+    return RootCfg(**raw), text
 
 
-def _load_and_prepare(label: str, cfg: dict) -> pd.DataFrame:
-    read = ReadSpec(**{k:v for k,v in cfg.items() if k in ['path','delimiter','encoding','dtypes','header']})
+def _load_and_prepare(label: str, cfg) -> pd.DataFrame:
+    # cfg is a dataclass (e.g., InputCfg) with attributes like path, delimiter, encoding, dtypes, header
+    read = ReadSpec(
+        path=cfg.path,
+        delimiter=getattr(cfg, 'delimiter', None),
+        encoding=getattr(cfg, 'encoding', None),
+        dtypes=getattr(cfg, 'dtypes', None),
+        header=getattr(cfg, 'header', None),
+    )
     df = read.read()
-    df = sanitize(df, cfg.get('sanitize'))
-    df = apply_filters(df, cfg.get('prefilter'))
+    df = sanitize(df, getattr(cfg, 'sanitize', None))
+    df = apply_filters(df, getattr(cfg, 'prefilter', None))
     return df
 
 
 def run_job(config_path: str, out_dir: str, backend_name: str = 'pandas'):
     cfg, cfg_text = _load_config(config_path)
-    job = cfg.get('job', {})
-    A_cfg = cfg.get('inputs', {}).get('A')
-    B_cfg = cfg.get('inputs', {}).get('B')
+    inputs = getattr(cfg, 'inputs', None)
+    if inputs is None:
+        raise ValueError('Config must define inputs')
+    print("Inputs", inputs)
+    A_cfg = getattr(inputs,'A',None)
+    B_cfg = getattr(inputs,'B',None)
+    print("A_cfg", A_cfg)
+    print("B_cfg", B_cfg)
     if A_cfg is None or B_cfg is None:
         raise ValueError('Config must define inputs.A and inputs.B')
     
@@ -40,28 +57,37 @@ def run_job(config_path: str, out_dir: str, backend_name: str = 'pandas'):
     A = _load_and_prepare('A', A_cfg)
     B = _load_and_prepare('B', B_cfg)
     # Aggregate separately
-    A_agg = aggregate(A, cfg.get('aggregate', {}).get('A'))
-    B_agg= aggregate(B, cfg.get('aggregate', {}).get('B'))
+    A_agg = aggregate(A, getattr(getattr(cfg, 'aggregate', None), 'A', None))
+    B_agg = aggregate(B, getattr(getattr(cfg, 'aggregate', None), 'B', None))
     # Join
-    join_cfg = cfg.get('join', {})
-    keys = join_cfg.get('keys') or []
-    join_type = join_cfg.get('type', _DEF_JOIN_TYPE)
-    key_name = join_cfg.get('key_name')
+    join_cfg = getattr(cfg, 'join', None)
+    keys = (getattr(join_cfg, 'keys', None) or []) if join_cfg else []
+    join_type = (getattr(join_cfg, 'type', None) or _DEF_JOIN_TYPE) if join_cfg else _DEF_JOIN_TYPE
+    key_name = getattr(join_cfg, 'key_name', None) if join_cfg else None
 
-    df = join(A_agg, B_agg, keys=keys, how=join_type, key_name=key_name,prefix_A=suffix_A, prefix_B=suffix_B)
-    # print(df)
+    df = join(A_agg, B_agg, keys=keys, how=join_type, key_name=key_name, prefix_A=suffix_A, prefix_B=suffix_B)
     # Reconcile
-    df = reconcile(df, cfg.get('reconcile', {}),recon_cols_section='numeric',prefix_A=suffix_A, prefix_B=suffix_B)
+    df = reconcile(
+        df,
+        getattr(cfg, 'reconcile', None),
+        recon_cols_section='numeric',
+        prefix_A=suffix_A,
+        prefix_B=suffix_B,
+    )
     # Reports
-    # print("select cols ", (cfg.get('report', {}).get('select', {}).get('keys') if cfg.get('report') else None))
-    emit_reports(df, cfg.get('report', {}), select_cols=(cfg.get('report', {}).get('select', {}).get('keys') if cfg.get('report') else None), suffix_A=suffix_A, suffix_B=suffix_B)
+    report_cfg = getattr(cfg, 'report', None)
+    select_keys = None
+    if report_cfg is not None and getattr(report_cfg, 'select', None) is not None:
+        if getattr(report_cfg.select, 'keys', None) is not None:
+            select_keys = report_cfg.select.keys
+    emit_reports(df, report_cfg, select_cols=select_keys, suffix_A=suffix_A, suffix_B=suffix_B)
     # Audit
     write_audit(out_dir, cfg_text)
     # === NEW: Drill-down (iterative un-group) ===
     # ...
     # === Drill paths ===
-    dd = (cfg.get('drilldown') or {})
-    if dd.get('enabled') and dd.get('levels'):
-        strategy = dd.get('strategy', 'add')  # default to drill-down
-        run_drilldown(A, B, cfg, dd['levels'], strategy=strategy)
+    dd = getattr(cfg, 'drilldown', None)
+    if dd and getattr(dd, 'enabled', False) and getattr(dd, 'levels', None):
+        strategy = getattr(dd, 'strategy', 'add')  # default to drill-down
+        run_drilldown(A, B, cfg, dd.levels, strategy=strategy)
     return df
