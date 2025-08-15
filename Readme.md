@@ -1,3 +1,31 @@
+# ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
+
+<details>
+<summary><strong>Table of Contents</strong></summary>
+
+- [Introduction](#introduction)
+- [Objectives](#objectives)
+- [What It Does](#what-it-does)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Example Outputs](#example-outputs)
+- [YAML Configuration Guide](#yaml-configuration-guide)
+  - [Inputs](#inputs)
+  - [Filters](#filters)
+  - [Aggregation](#aggregation)
+  - [Join](#join)
+  - [Reconcile](#reconcile)
+  - [Report](#report)
+  - [Drilldown](#drilldown)
+- [How to Adapt to Any Two Datasets](#how-to-adapt-to-any-two-datasets)
+- [Extending the Framework](#extending-the-framework)
+- [Detailed Architecture & System Design](#detailed-architecture--system-design)
+- [CLI Help](#cli-help)
+- [Contributing](#contributing)
+- [License](#license)
+
+</details>
+
 # ReconciliationFramework
 
 A config‑driven, pure‑Python framework for reconciling two datasets (typically CSVs). Define reconciliation jobs in YAML—no rewrites per use case. The pipeline is composable: sanitize → filter → aggregate → join → reconcile → report → (optional) drill‑down.
@@ -33,6 +61,30 @@ ReconciliationFramework enables robust, auditable, and scalable reconciliation o
 
 ---
 
+## Installation
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/yourusername/ReconciliationFramework.git
+   cd ReconciliationFramework
+   ```
+
+2. **Create and activate a virtual environment**
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate         # Windows: .venv\Scripts\activate
+   ```
+
+3. **Install required packages**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+---
+
 ## Quick Start
 
 1. **Setup Git Repo and Python Env if you haven't already**
@@ -63,9 +115,163 @@ ReconciliationFramework enables robust, auditable, and scalable reconciliation o
 
 ---
 
+## Example Outputs
+
+### Sample CSV snippet (`matched.csv`)
+
+```csv
+book,ccy,FDCS_currencyAmount,CALC_currencyAmount,delta_currencyAmount,abs_delta_currencyAmount,match_currencyAmount,match_flag
+Desk1,USD,1000.0,1000.5,-0.5,0.5,True,1
+Desk2,EUR,2000.0,1999.0,1.0,1.0,True,1
+```
+
+### Sample JSON snippet (`metrics.json`)
+
+```json
+{
+  "total_rows_A": 10000,
+  "total_rows_B": 10000,
+  "matched_rows": 9500,
+  "non_matched_rows": 500
+}
+```
+
+### Folder structure for drilldown outputs
+
+```
+out/
+└── example/
+    ├── matched.csv
+    ├── non_matched.csv
+    ├── differences.csv
+    ├── metrics.json
+    ├── audit.json
+    └── drilldown/
+        ├── level_01/
+        └── level_02/
+```
+
+---
+
 ## YAML Configuration Guide
 
-A recon job is entirely defined in YAML. Anatomy:
+### Inputs
+
+```yaml
+inputs:
+  A:                           # Dataset A (left)
+    path: "./sample/fdcs.csv"
+    delimiter: ","
+    encoding: "utf-8"
+    dtypes:                    # enforce types (date/float/string)
+      trade_id: "string"
+      book: "string"
+      ccy: "string"
+      currencyAmount: "float64"
+      asof_date: "date"
+    sanitize:                  # standardize columns
+      rename: { TRD_ID: trade_id, CCY: ccy, BAL: currencyAmount, ASOF: asof_date }
+      select: [trade_id, book, ccy, currencyAmount, asof_date]
+      normalize:
+        trim_strings: true
+        upper_case: [book, ccy]
+
+  B:                           # Dataset B (right)
+    path: "./sample/calc.csv"
+    dtypes:
+      trade_id: "string"
+      book: "string"
+      ccy: "string"
+      currencyAmount: "float64"
+      asof_date: "date"
+    sanitize:
+      rename: { TRADE: trade_id, CURRENCY: ccy, currency_amount: currencyAmount, ASOF: asof_date }
+      select: [trade_id, book, ccy, currencyAmount, asof_date]
+      normalize:
+        trim_strings: true
+        upper_case: [book, ccy]
+```
+
+### Filters
+
+```yaml
+filters:
+  A:
+    - { col: "ccy", op: "in", value: ["USD", "EUR"] }
+  B:
+    - { col: "ccy", op: "in", value: ["USD", "EUR"] }
+```
+
+### Aggregation
+
+```yaml
+aggregate:
+  A:
+    group_by: [book, ccy]      # each side can differ if needed
+    metrics: { currencyAmount: { agg: "sum" } }
+  B:
+    group_by: [book, ccy]
+    metrics: { currencyAmount: { agg: "sum" } }
+```
+
+### Join
+
+```yaml
+join:
+  keys: [book, ccy]            # join directly on columns -> unsuffixed keys in results
+  key_name: null               # (set to name to synthesize a single hashed key ex: recon_key)
+  type: outer
+```
+
+### Reconcile
+
+```yaml
+reconcile:
+  numeric:
+    - column: currencyAmount   # compare A vs B for this column
+      comparator: relative
+      tol_pct: 0.002           # 0.2% tolerance
+      min_base: 1e-8
+    - column: USDAmount
+      comparator: relative
+      tol_pct: 0.002
+      min_base: 1e-8
+```
+
+### Report
+
+```yaml
+report:
+  outputs:
+    dir: "out/example"
+    formats: ["csv", "parquet"]
+  dataset_names:               # relabel A_/B_ columns in exports (optional)
+    A: "FDCS"
+    B: "CALC"
+  select:
+    keys:
+      - book
+      - ccy
+      - FDCS_currencyAmount
+      - CALC_currencyAmount
+      - delta_currencyAmount
+      - abs_delta_currencyAmount
+      - match_currencyAmount
+      - match_flag
+```
+
+### Drilldown
+
+```yaml
+drilldown:
+  enabled: true
+  strategy: add                # “add” = drill-down (more granular); “remove” = drill-up
+  levels:
+    - add: [trade_id]          # base [book, ccy] → add trade_id
+    - add: [trade_id, asof_date]  # then add asof_date
+```
+
+### Full YAML Example
 
 ```yaml
 job:
@@ -175,6 +381,72 @@ drilldown:
 6. **Drill:** Add levels with `strategy: add` to progressively include more dimensions (e.g., trade, counterparty, date).
 
 > **Tip:** If one side lacks a column you “add” for drill‑down, the framework will still run; it only joins on the intersection that exists on both sides.
+
+---
+
+## Extending the Framework
+
+The framework is designed to be extensible. You can add your own components as follows:
+
+- **New Comparators:** Implement custom comparator functions for numeric reconciliation (e.g., tolerance types beyond absolute and relative). Register them in the comparator module to be used in YAML.
+
+- **New Backends:** Add support for alternative data processing backends (e.g., Polars, Dask). Implement the required interfaces for data loading, filtering, aggregation, and joining.
+
+- **New Filters:** Develop additional filter predicates beyond the built-in ones (eq, in, gt, etc.) by extending the filtering logic. Register your filters so they can be specified in the YAML config.
+
+Refer to the developer documentation and source code comments for integration details.
+
+---
+## Detailed Architecture & System Design
+
+This section provides a comprehensive overview of the internal architecture, design principles, and data flow of the ReconciliationFramework. It explains how the framework processes data from input ingestion to report generation, how the YAML configuration drives execution, and where extensibility points exist. For a full detailed document, see [recon/Readme_architecture.md](recon/Readme_architecture.md).
+
+---
+
+## CLI Help
+
+Run the following command to see available options and usage:
+
+```bash
+python -m recon.cli --help
+```
+
+Example output:
+
+```
+Usage: cli.py [OPTIONS]
+
+Options:
+  --config PATH        Path to YAML configuration file  [required]
+  --out DIRECTORY      Output directory for reports     [default: out]
+  --backend [pandas]   Backend to use for processing     [default: pandas]
+  --verbose            Enable verbose logging
+  --help               Show this message and exit.
+```
+
+---
+
+## Contributing
+
+I welcome contributions! Please follow these guidelines:
+
+- **Coding Style:** Follow PEP 8 style conventions. Use black or similar formatter for consistency.
+
+- **Branch Naming:** Use descriptive branch names such as `feature/add-new-comparator` or `bugfix/fix-join-logic`.
+
+- **Development Install:** For development, install the package in editable mode:
+
+  ```bash
+  pip install -e .
+  ```
+
+- Submit pull requests with clear descriptions and tests.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
