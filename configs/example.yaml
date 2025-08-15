@@ -1,5 +1,5 @@
 job:
-  name: "example_fdcs_vs_calc"
+  name: "fdcs_vs_calc"
   backend: pandas
   # join_type: outer
   timezone: "Asia/Kolkata"

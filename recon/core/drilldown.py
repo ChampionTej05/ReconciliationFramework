@@ -6,6 +6,9 @@ from typing import Dict, List, Any, Optional
 
 import pandas as pd
 
+import logging
+log = logging.getLogger(__name__)
+
 from .aggregate import aggregate
 from .joiner import join
 from .reconcile import reconcile
@@ -41,7 +44,10 @@ def run_drilldown(
 ) -> None:
     if not levels:
         return
-    print("f{A_prepared} \n {B_prepared}", A_prepared, B_prepared)
+    log.debug("drilldown: A shape=%s B shape=%s", getattr(A_prepared, 'shape', None), getattr(B_prepared, 'shape', None))
+    # DEBUG: uncomment to inspect a small sample during investigation
+    # log.debug("A head:\n%s", A_prepared.head(3))
+    # log.debug("B head:\n%s", B_prepared.head(3))
     agg_cfg = getattr(full_cfg, "aggregate", None)
     aggA_base = getattr(agg_cfg, "A", None) if agg_cfg else None
     aggB_base = getattr(agg_cfg, "B", None) if agg_cfg else None
@@ -66,13 +72,12 @@ def run_drilldown(
         A_add = getattr(level, "A_add", None) or add_common or []
         B_add = getattr(level, "B_add", None) or add_common or []
         A_rem = getattr(level, "A_remove", None) or rem_common or []
-        B_rem = getattr(level, "B_Remove", None) or rem_common or []
+        B_rem = getattr(level, "B_remove", None) or rem_common or []
 
         # Adjust group_by for each side
         aggA = _adjust_groupby(aggA_base, add=A_add, remove=A_rem)
         aggB = _adjust_groupby(aggB_base, add=B_add, remove=B_rem)
-        print("AggA", aggA)
-        print("AggB", aggB)
+        log.info("drilldown level %02d: aggA=%s aggB=%s", idx, bool(aggA), bool(aggB))
         # Aggregate at this level
         A_agg = aggregate(A_prepared, aggA)
         B_agg = aggregate(B_prepared, aggB)
@@ -111,7 +116,9 @@ def run_drilldown(
 
         # drilldown will have columns from group by + select_cols
         drilldown_columns = (A_add or []) + (select_cols or [])
-        print("Drilldown Columns", drilldown_columns)
+        log.debug("drilldown level %02d: columns=%s", idx, drilldown_columns)
+        # DEBUG: uncomment to inspect columns
+        # log.debug("join keys this level=%s", level_join_keys)
         seen = set()
         # no duplicate columns post drilldown selections
         result_columns = [x for x in drilldown_columns if not (x in seen or seen.add(x))]

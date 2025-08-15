@@ -2,6 +2,8 @@ from __future__ import annotations
 import math
 import pandas as pd
 from typing import Optional
+import logging
+log = logging.getLogger(__name__)
 
 _DEF_MIN_BASE = 1e-8
 
@@ -15,8 +17,6 @@ def _abs_match(a: pd.Series, b: pd.Series, tol_abs: float) -> pd.Series:
 def _rounded_match(a: pd.Series, b: pd.Series, decimals: int) -> pd.Series:
     return a.round(decimals).eq(b.round(decimals))
 
-from typing import Optional
-
 def reconcile(
     df: pd.DataFrame,
     rules: Optional['ReconcileCfg'],
@@ -25,6 +25,10 @@ def reconcile(
     prefix_B: str = '_B'
 ) -> pd.DataFrame:
     df = df.copy()
+    log.info("reconcile: section=%s", recon_cols_section)
+    log.debug("reconcile: input shape=%s", getattr(df, 'shape', None))
+    # DEBUG: uncomment to inspect a sample
+    # log.debug("reconcile head:\n%s", df.head(5))
     per_col_flags = []
     for rule in (getattr(rules, recon_cols_section, []) if rules is not None else []):
         col = rule.column
@@ -36,6 +40,7 @@ def reconcile(
         df[f"pct_delta_{col}"] = (b - a) / (a.replace(0, _DEF_MIN_BASE))
         # comparator via attributes
         comp = getattr(rule, 'comparator', 'relative')
+        log.debug("reconcile: column=%s comparator=%s", col, comp)
         if comp == 'relative':
             tol = float(getattr(rule, 'tol_pct', 0.0))
             flag = _rel_match(a, b, tol, float(getattr(rule, 'min_base', _DEF_MIN_BASE)))
@@ -51,6 +56,7 @@ def reconcile(
         df['match_flag'] = df[per_col_flags].all(axis=1)
     else:
         df['match_flag'] = True
+    log.debug("reconcile: flags computed for %d columns", len(per_col_flags))
     return df
 
 # Optional non-numeric API (signature only)
