@@ -1,0 +1,8 @@
+flowchart LR
+  A[Input Reader] --> B[Sanitize Module]
+  B --> C[Filter Module]
+  C --> D[Aggregate Module]
+  D --> E[Join Module]
+  E --> F[Reconcile Module]
+  F --> G[Report Module]
+  G --> H[Drilldown Module]

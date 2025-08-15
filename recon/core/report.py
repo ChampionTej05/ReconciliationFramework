@@ -2,16 +2,17 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import pandas as pd
+import logging
+log = logging.getLogger(__name__)
 
 _DEF_FORMATS = ["csv"]
 
-# --- add near the top of report.py ---
-def _apply_dataset_labels(df, report_cfg):
+def _apply_dataset_labels(df: pd.DataFrame, report_cfg: 'ReportCfg'):
     """
-    Rename A_/B_ (or _A/_B) columns to user-provided dataset names.
+    Rename A_/B_ (or _A/_B) columns to user-provided dataset names via report_cfg.dataset_names.
     Returns (renamed_df, rename_map_old_to_new).
     """
-    labels = (report_cfg.get("dataset_names") or {})
+    labels = getattr(report_cfg, 'dataset_names', {}) or {}
     a_label = labels.get("A")
     b_label = labels.get("B")
     rename_map = {}
@@ -30,11 +31,11 @@ def _apply_dataset_labels(df, report_cfg):
 
     return df.rename(columns=rename_map), rename_map
 
-def _map_select_cols(select_cols, report_cfg):
+def _map_select_cols(select_cols, report_cfg: 'ReportCfg'):
     """Apply the same relabeling logic to select list (if user still uses A_/B_ names)."""
     if not select_cols:
         return None
-    labels = (report_cfg.get("dataset_names") or {})
+    labels = getattr(report_cfg, 'dataset_names', {}) or {}
     a_label = labels.get("A")
     b_label = labels.get("B")
 
@@ -59,12 +60,14 @@ def _write(df: pd.DataFrame, out: Path, name: str, formats: list[str]):
         except Exception:
             pass
 
-def emit_reports(df: pd.DataFrame, report_cfg: dict, select_cols: list[str] | None = None, suffix_A='_A', suffix_B='_B'):
-    # print("DF post reconcile")
-    print(df)
-    outdir = Path(report_cfg['outputs']['dir'])
-    formats = report_cfg['outputs'].get('formats', _DEF_FORMATS)
-        # NEW: relabel A_/B_ columns -> dataset names
+def emit_reports(df: pd.DataFrame, report_cfg: 'ReportCfg', select_cols: list[str] | None = None, suffix_A: str = '_A', suffix_B: str = '_B'):
+    log.debug("emit_reports: df shape=%s", getattr(df, 'shape', None))
+    # DEBUG: uncomment to inspect a sample
+    # log.debug("emit head:\n%s", df.head(5))
+    outdir = Path(report_cfg.outputs.dir)
+    formats = getattr(report_cfg.outputs, 'formats', _DEF_FORMATS) or _DEF_FORMATS
+    log.info("emit_reports: outdir=%s formats=%s", outdir, formats)
+    # NEW: relabel _A/_B columns -> dataset names
     df, rename_map = _apply_dataset_labels(df, report_cfg)
 
     # NEW: map select_cols through the same logic
@@ -76,8 +79,9 @@ def emit_reports(df: pd.DataFrame, report_cfg: dict, select_cols: list[str] | No
         base = [c for c in select_cols if c in df.columns]
     else:
         base = list(df.columns)
-    matched = df[df.get('match_flag', False) == True][base]
-    non_matched = df[df.get('match_flag', False) == False][base]
+    matched = df[(df.get('match_flag', False) == True)][base]
+    non_matched = df[(df.get('match_flag', False) == False)][base]
+    log.info("emit_reports: matched=%d non_matched=%d base_cols=%s", matched.shape[0], non_matched.shape[0], base)
     # diffs = df[[c for c in df.columns if c.startswith('delta_') or c.startswith('abs_delta_') or c.startswith('pct_delta_')] + [c for c in base if c.endswith(suffix_A) or c.endswith(suffix_B)]]
     diff_cols = [c for c in df.columns if c.startswith(('delta_', 'abs_delta_', 'pct_delta_'))]
     # side_cols = [c for c in base if '_' in c]  # simple heuristic to include side-specific cols
